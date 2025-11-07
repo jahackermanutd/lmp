@@ -1,21 +1,48 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { MdPerson, MdEmail, MdLock, MdVisibility, MdVisibilityOff } from 'react-icons/md';
+import { useAuth } from './context/AuthContext';
+import Cookies from 'js-cookie';
 
 export default function Page() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
+  const { login, user, loading } = useAuth();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // Redirect if already logged in
+  useEffect(() => {
+    if (!loading && user) {
+      const roleRoutes: Record<string, string> = {
+        admin: '/admin',
+        'office-manager': '/office-manager',
+        seo: '/seo',
+      };
+      
+      const redirectTo = roleRoutes[user.role] || '/admin';
+      window.location.href = redirectTo;
+    }
+  }, [user, loading]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    setTimeout(() => {
+    setError('');
+
+    try {
+      // Clear any existing cookies before login
+      Cookies.remove('token');
+      
+      await login(email, password);
+      // Redirect will be handled by the login function in AuthContext
+      // Don't set isLoading to false since we're redirecting away
+    } catch (err: any) {
+      setError(err.message || 'Kirish muvaffaqiyatsiz bo\'ldi');
       setIsLoading(false);
-      alert('Kirish muvaffaqiyatli!');
-    }, 1000);
+    }
   };
 
   return (
@@ -43,6 +70,20 @@ export default function Page() {
           </div>
 
             <form onSubmit={handleSubmit} className="space-y-4 font-primary">
+              {error && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+                  {error}
+                </div>
+              )}
+
+              {/* Demo credentials info */}
+              <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg text-xs">
+                <p className="font-semibold mb-1">Demo hisoblar:</p>
+                <p>Admin: admin@ebolt.uz / admin123</p>
+                <p>Office: office@ebolt.uz / office123</p>
+                <p>SEO: seo@ebolt.uz / seo123</p>
+              </div>
+
               <div className="font-primary">
                 <div className="relative flex items-center">
                   <MdEmail className="absolute left-3 text-gray-400 pointer-events-none z-10" size={20} />
@@ -82,16 +123,16 @@ export default function Page() {
                 </button>
               </div>
 
-              <button
+                <button
                 type="submit"
-                disabled={isLoading}
-                className="w-full bg-gray-900 hover:bg-gray-800 text-white font-semibold py-3 rounded-lg transition-all duration-300 font-primary cursor-pointer"
-              >
+                disabled={!email || !password || isLoading}
+                className="w-full bg-gray-900 hover:bg-gray-800 disabled:bg-gray-500 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg transition-all duration-300 font-primary cursor-pointer"
+                >
                 {isLoading ? 'Tekshirilmoqda...' : 'Kirish'}
-              </button>
-            </form>
-        </div>
-      </div>
-    </div>
-  );
-}
+                </button>
+              </form>
+            </div>
+            </div>
+          </div>
+          );
+        }
