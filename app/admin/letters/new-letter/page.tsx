@@ -1,9 +1,11 @@
 'use client';
 
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import type { ChangeEvent } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Calendar, Download, FileCheck2, Layers, Plus, RefreshCw, Tag, Trash2 } from 'lucide-react';
 import { PDFDocument, PDFImage, PDFPage, PDFFont, StandardFonts, rgb } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
 
 type Priority = 'low' | 'normal' | 'high';
 
@@ -17,6 +19,8 @@ type LetterMeta = {
   language: string;
   dueDate: string;
   reference: string;
+  signatoryName: string;
+  signatoryRole: string;
 };
 
 type LetterSection = {
@@ -46,6 +50,8 @@ const defaultMeta: LetterMeta = {
   language: 'uz',
   dueDate: today,
   reference: 'TR-2025-04-18',
+  signatoryName: 'Rustam Ganiev',
+  signatoryRole: 'Ijrochi direktor',
 };
 
 const defaultSections: LetterSection[] = [
@@ -74,6 +80,167 @@ const defaultAttachments: Attachment[] = [
 const defaultNotes =
   "Klub yuridik bo'limi bilan to'liq kelishuv tayyor. Homiylik shartlari Marketing bo'limi tomonidan qo'llab-quvvatlanadi.";
 
+// Brand palette sourced from brand-guideline.md
+const BRAND_GUIDELINE = {
+  colors: {
+    midnight: '#1B3C53',
+    steel: '#456882',
+    sand: '#D2C1B6',
+    linen: '#F9F3EF',
+  },
+  fonts: {
+    primary: '"Reddit Sans", "Sora", sans-serif',
+    accent: '"Sora", "Reddit Sans", sans-serif',
+  },
+} as const;
+
+const BRAND_PALETTE = [
+  { name: 'Midnight', value: BRAND_GUIDELINE.colors.midnight },
+  { name: 'Steel', value: BRAND_GUIDELINE.colors.steel },
+  { name: 'Sand', value: BRAND_GUIDELINE.colors.sand },
+  { name: 'Linen', value: BRAND_GUIDELINE.colors.linen },
+] as const;
+
+type LetterheadDesign = {
+  company: string;
+  tagline: string;
+  contacts: string[];
+  primaryColor: string;
+  accentColor: string;
+  backgroundColor: string;
+  textColor: string;
+};
+
+type PdfFonts = {
+  body: Uint8Array | null;
+  heading: Uint8Array | null;
+};
+
+const FONT_PATHS = {
+  body: '/fonts/RedditSans-Regular.ttf',
+  heading: '/fonts/Sora-SemiBold.ttf',
+} as const;
+
+const defaultLetterhead: LetterheadDesign = {
+  company: '"PFK AGMK" MChJ',
+  tagline: 'Professional Futbol Klubi AGMK',
+  contacts: ['Toshkent viloyati, Olmaliq shahri, 110700', 'Tel: +998 71 000 00 00', 'www.agmk.uz · info@agmk.uz'],
+  primaryColor: BRAND_GUIDELINE.colors.midnight,
+  accentColor: BRAND_GUIDELINE.colors.sand,
+  backgroundColor: BRAND_GUIDELINE.colors.linen,
+  textColor: BRAND_GUIDELINE.colors.midnight,
+};
+
+type Rgb = { r: number; g: number; b: number };
+
+const sanitizeHex = (hex: string) => hex.replace('#', '').trim();
+
+const expandHex = (value: string) => (value.length === 3 ? value.split('').map((char) => `${char}${char}`).join('') : value);
+
+const hexToRgbObject = (hex: string): Rgb | null => {
+  const sanitized = sanitizeHex(hex);
+  if (!/^[\da-f]{3,6}$/i.test(sanitized)) return null;
+  const normalized = expandHex(sanitized);
+  if (normalized.length !== 6) return null;
+  const value = parseInt(normalized, 16);
+  return {
+    r: (value >> 16) & 255,
+    g: (value >> 8) & 255,
+    b: value & 255,
+  };
+};
+
+const mixWithWhite = (hex: string, ratio: number) => {
+  const color = hexToRgbObject(hex);
+  if (!color) return '#A0AEC0';
+  const lighten = (channel: number) => Math.round(channel + (255 - channel) * ratio);
+  return `#${lighten(color.r).toString(16).padStart(2, '0')}${lighten(color.g).toString(16).padStart(2, '0')}${lighten(color.b)
+    .toString(16)
+    .padStart(2, '0')}`;
+};
+
+const PDF_COLOR_FALLBACK = {
+  primary: rgb(17 / 255, 28 / 255, 48 / 255),
+  accent: rgb(229 / 255, 166 / 255, 62 / 255),
+  ink: rgb(30 / 255, 35 / 255, 48 / 255),
+  muted: rgb(102 / 255, 112 / 255, 126 / 255),
+};
+
+const hexToPdfColor = (hex: string, fallback: ReturnType<typeof rgb>) => {
+  const color = hexToRgbObject(hex);
+  if (!color) return fallback;
+  return rgb(color.r / 255, color.g / 255, color.b / 255);
+};
+
+const createPseudoQrMatrix = (seed: string, dimension = 21) => {
+  const sanitized = seed && seed.trim().length ? seed : 'default';
+  const matrix = Array.from({ length: dimension }, () => Array<boolean>(dimension).fill(false));
+  let hash = 0;
+  for (let index = 0; index < sanitized.length; index += 1) {
+    hash = (hash * 33 + sanitized.charCodeAt(index)) & 0xffffffff;
+  }
+  let state = hash || 1;
+  const next = () => {
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return Math.abs(state);
+  };
+  matrix.forEach((row, rowIndex) => {
+    row.forEach((_, colIndex) => {
+      matrix[rowIndex][colIndex] = (next() % 1000) / 1000 > 0.5;
+    });
+  });
+  const drawFinder = (startX: number, startY: number) => {
+    for (let y = 0; y < 7; y += 1) {
+      for (let x = 0; x < 7; x += 1) {
+        const isBorder = x === 0 || y === 0 || x === 6 || y === 6;
+        const isCenter = x >= 2 && x <= 4 && y >= 2 && y <= 4;
+        matrix[startY + y][startX + x] = isBorder || isCenter;
+      }
+    }
+  };
+  if (dimension >= 21) {
+    drawFinder(0, 0);
+    drawFinder(dimension - 7, 0);
+    drawFinder(0, dimension - 7);
+  }
+  return matrix;
+};
+
+const drawPseudoQrCode = (
+  page: PDFPage,
+  x: number,
+  topY: number,
+  size: number,
+  matrix: boolean[][],
+  color: ReturnType<typeof rgb>
+) => {
+  const modules = matrix.length;
+  if (!modules) return;
+  const moduleSize = size / modules;
+  matrix.forEach((row, rowIndex) => {
+    row.forEach((isFilled, colIndex) => {
+      if (!isFilled) return;
+      page.drawRectangle({
+        x: x + colIndex * moduleSize,
+        y: topY - (rowIndex + 1) * moduleSize,
+        width: moduleSize,
+        height: moduleSize,
+        color,
+      });
+    });
+  });
+  page.drawRectangle({
+    x,
+    y: topY - size,
+    width: size,
+    height: size,
+    borderColor: color,
+    borderWidth: 1,
+  });
+};
+
 const priorityCopy: Record<Priority, string> = {
   low: 'Past',
   normal: 'Normal',
@@ -100,22 +267,6 @@ const writingGuides = [
   "Keyingi qadamlar bo'limida javob muddatini eslatib o'ting.",
 ];
 
-const LETTERHEAD = {
-  company: '"PFK AGMK" MChJ',
-  tagline: 'Professional Futbol Klubi AGMK',
-  contacts: [
-    'Toshkent viloyati, Olmaliq shahri, 110700',
-    'Tel: +998 71 000 00 00',
-    'www.agmk.uz · info@agmk.uz',
-  ],
-  colors: {
-    primary: rgb(17 / 255, 28 / 255, 48 / 255),
-    accent: rgb(229 / 255, 166 / 255, 62 / 255),
-    ink: rgb(30 / 255, 35 / 255, 48 / 255),
-    muted: rgb(102 / 255, 112 / 255, 126 / 255),
-  },
-};
-
 const daysUntil = (dateString: string) => {
   const due = new Date(dateString);
   const diff = due.getTime() - Date.now();
@@ -131,10 +282,22 @@ type PdfPayload = {
   attachments: Attachment[];
 };
 
-async function generateLetterPdf(payload: PdfPayload, logoBytes?: Uint8Array) {
+async function generateLetterPdf(payload: PdfPayload, letterhead: LetterheadDesign, fonts: PdfFonts, logoBytes?: Uint8Array) {
   const doc = await PDFDocument.create();
-  const regularFont = await doc.embedFont(StandardFonts.Helvetica);
-  const boldFont = await doc.embedFont(StandardFonts.HelveticaBold);
+  doc.registerFontkit(fontkit);
+  const fallbackRegular = await doc.embedFont(StandardFonts.Helvetica);
+  const fallbackBold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const embedCustomFont = async (bytes: Uint8Array | null, fallback: PDFFont) => {
+    if (!bytes || !bytes.length) return fallback;
+    try {
+      return await doc.embedFont(bytes, { subset: true });
+    } catch (error) {
+      console.warn('Custom font embed failed, falling back to Helvetica', error);
+      return fallback;
+    }
+  };
+  const bodyFont = await embedCustomFont(fonts.body, fallbackRegular);
+  const headingFont = await embedCustomFont(fonts.heading, fallbackBold);
   let logoImage: PDFImage | null = null;
   if (logoBytes && logoBytes.length) {
     try {
@@ -149,280 +312,309 @@ async function generateLetterPdf(payload: PdfPayload, logoBytes?: Uint8Array) {
   }
 
   const margin = 48;
-  const fontSize = 11;
+  const paragraphGap = 14;
   const lineGap = 4;
-  const paragraphGap = 12;
-  const headerHeight = 120;
+  const headerReservedHeight = 150;
   const footerHeight = 72;
   const pageWidth = 612;
   const pageHeight = 792;
   const maxWidth = pageWidth - margin * 2;
-  const textColor = LETTERHEAD.colors.ink;
-  const accentColor = LETTERHEAD.colors.accent;
+  const textColor = hexToPdfColor(letterhead.textColor, PDF_COLOR_FALLBACK.ink);
+  const mutedColor = hexToPdfColor(mixWithWhite(letterhead.textColor, 0.35), PDF_COLOR_FALLBACK.muted);
+  const accentColor = hexToPdfColor(letterhead.accentColor, PDF_COLOR_FALLBACK.accent);
+  const footerContacts = letterhead.contacts.length ? letterhead.contacts : defaultLetterhead.contacts;
 
   const {
-    meta: { title, recipientName, recipientRole, organization, reference, category, language, priority, dueDate },
+    meta: { title, recipientName, recipientRole, organization, reference, language, dueDate, signatoryName, signatoryRole },
     sections,
     notes,
     attachments,
   } = payload;
 
   let cursorY = 0;
-  let pageNumber = 0;
   let page: PDFPage;
+  const pages: PDFPage[] = [];
 
   const drawLetterhead = (targetPage: PDFPage) => {
-    targetPage.drawRectangle({
-      x: 0,
-      y: pageHeight - headerHeight,
-      width: pageWidth,
-      height: headerHeight,
-      color: LETTERHEAD.colors.primary,
-    });
-    targetPage.drawRectangle({
-      x: 0,
-      y: pageHeight - headerHeight,
-      width: 16,
-      height: headerHeight,
-      color: accentColor,
-    });
-    targetPage.drawText(LETTERHEAD.company, {
-      x: margin,
-      y: pageHeight - 36,
-      size: 20,
-      font: boldFont,
-      color: rgb(1, 1, 1),
-    });
-    targetPage.drawText(LETTERHEAD.tagline, {
-      x: margin,
-      y: pageHeight - 58,
-      size: 11,
-      font: regularFont,
-      color: rgb(0.82, 0.87, 0.94),
-    });
-    const rightColumnX = pageWidth - margin - 180;
-    targetPage.drawText(`Ma'lumotnoma: ${reference}`, {
-      x: rightColumnX,
-      y: pageHeight - 40,
-      size: 10,
-      font: regularFont,
-      color: rgb(0.9, 0.92, 0.95),
-    });
-    targetPage.drawText(`Tasdiqlash muddati: ${dueDate}`, {
-      x: rightColumnX,
-      y: pageHeight - 56,
-      size: 10,
-      font: regularFont,
-      color: rgb(0.9, 0.92, 0.95),
-    });
+    const logoWidth = 72;
+    const logoMaxHeight = 64;
+    const columnGap = 20;
+    const topY = pageHeight - margin;
+    const detailX = margin + logoWidth + columnGap;
+    const detailWidth = pageWidth - margin - detailX;
     if (logoImage) {
-      const desiredWidth = 90;
-      const aspectRatio = logoImage.height / logoImage.width;
-      const height = desiredWidth * aspectRatio;
+      const ratio = logoImage.height / logoImage.width;
+      const height = Math.min(logoMaxHeight, logoWidth * ratio);
       targetPage.drawImage(logoImage, {
-        x: pageWidth - margin - desiredWidth,
-        y: pageHeight - headerHeight / 2 - height / 2,
-        width: desiredWidth,
+        x: margin,
+        y: topY - height,
+        width: logoWidth,
         height,
       });
     } else {
-      targetPage.drawCircle({
-        x: pageWidth - margin - 40,
-        y: pageHeight - headerHeight / 2,
-        size: 26,
+      targetPage.drawRectangle({
+        x: margin,
+        y: topY - logoMaxHeight,
+        width: logoWidth,
+        height: logoMaxHeight,
+        borderColor: accentColor,
+        borderWidth: 1,
+      });
+      targetPage.drawText('LOGO', {
+        x: margin + 14,
+        y: topY - logoMaxHeight / 2 - 4,
+        size: 11,
+        font: headingFont,
         color: accentColor,
       });
     }
-  };
-
-  const drawFooter = (targetPage: PDFPage, currentPageNumber: number) => {
-    targetPage.drawLine({
-      start: { x: margin, y: footerHeight },
-      end: { x: pageWidth - margin, y: footerHeight },
-      thickness: 1.2,
-      color: accentColor,
+    let detailY = topY - 8;
+    targetPage.drawText(letterhead.company, {
+      x: detailX,
+      y: detailY,
+      size: 16,
+      font: headingFont,
+      color: textColor,
     });
-    LETTERHEAD.contacts.forEach((contact, index) => {
-      targetPage.drawText(contact, {
-        x: margin,
-        y: footerHeight - 20 - index * 12,
-        size: 9,
-        font: regularFont,
-        color: LETTERHEAD.colors.muted,
+    detailY -= 18;
+    if (letterhead.tagline) {
+      targetPage.drawText(letterhead.tagline, {
+        x: detailX,
+        y: detailY,
+        size: 11,
+        font: bodyFont,
+        color: mutedColor,
       });
+      detailY -= 16;
+    }
+    footerContacts.slice(0, 4).forEach((contact) => {
+      if (detailY <= pageHeight - headerReservedHeight + 20) return;
+      targetPage.drawText(contact, {
+        x: detailX,
+        y: detailY,
+        size: 10,
+        font: bodyFont,
+        color: mutedColor,
+        maxWidth: detailWidth,
+      });
+      detailY -= 13;
     });
-    targetPage.drawText(`Sahifa ${currentPageNumber}`, {
-      x: pageWidth - margin - 70,
-      y: footerHeight - 20,
-      size: 9,
-      font: boldFont,
-      color: LETTERHEAD.colors.muted,
+    targetPage.drawLine({
+      start: { x: margin, y: pageHeight - headerReservedHeight },
+      end: { x: pageWidth - margin, y: pageHeight - headerReservedHeight },
+      thickness: 1,
+      color: mutedColor,
     });
   };
 
-  const createPage = () => {
-    pageNumber += 1;
+  const createPage = (includeLetterhead = false) => {
     const nextPage = doc.addPage([pageWidth, pageHeight]);
-    drawLetterhead(nextPage);
-    drawFooter(nextPage, pageNumber);
-    cursorY = pageHeight - headerHeight - margin / 2;
+    pages.push(nextPage);
+    if (includeLetterhead) {
+      drawLetterhead(nextPage);
+      cursorY = pageHeight - headerReservedHeight - 24;
+    } else {
+      cursorY = pageHeight - margin;
+    }
     return nextPage;
-  };
-
-  const wrapText = (text: string, font = regularFont, size = fontSize) => {
-    const sanitized = text.replace(/\r/g, '');
-    const paragraphs = sanitized.split('\n');
-    const lines: string[] = [];
-
-    paragraphs.forEach((paragraph, paragraphIndex) => {
-      const words = paragraph.split(/\s+/).filter(Boolean);
-      if (!words.length) {
-        lines.push('');
-      } else {
-        let line = '';
-        words.forEach((word) => {
-          const trial = line ? `${line} ${word}` : word;
-          const width = font.widthOfTextAtSize(trial, size);
-          if (width > maxWidth && line) {
-            lines.push(line);
-            line = word;
-          } else {
-            line = trial;
-          }
-        });
-        if (line) lines.push(line);
-      }
-      if (paragraphIndex !== paragraphs.length - 1) {
-        lines.push('');
-      }
-    });
-
-    return lines.length ? lines : [''];
   };
 
   const ensureSpace = (needed: number) => {
     if (cursorY - needed <= footerHeight + margin / 2) {
-      page = createPage();
+      page = createPage(false);
     }
   };
 
-  const drawParagraph = (text: string, options: { font?: PDFFont; size?: number; color?: ReturnType<typeof rgb>; gapAfter?: number } = {}) => {
-    const { font = regularFont, size = fontSize, color = textColor, gapAfter = paragraphGap } = options;
-    const lines = wrapText(text, font, size);
-    lines.forEach((line) => {
-      ensureSpace(size + lineGap);
-      if (line) {
-        page.drawText(line, { x: margin, y: cursorY, size, font, color });
+  const splitParagraphs = (text: string) =>
+    text
+      .replace(/\r/g, '')
+      .split(/\n\s*\n/)
+      .map((paragraph) => paragraph.trim())
+      .filter(Boolean);
+
+  const wrapParagraph = (paragraph: string, font: PDFFont, size: number) => {
+    const words = paragraph.split(/\s+/).filter(Boolean);
+    const lines: string[] = [];
+    let line = '';
+    words.forEach((word) => {
+      const candidate = line ? `${line} ${word}` : word;
+      const width = font.widthOfTextAtSize(candidate, size);
+      if (width > maxWidth && line) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = candidate;
       }
-      cursorY -= size + lineGap;
     });
-    cursorY -= gapAfter;
+    if (line) lines.push(line);
+    return lines.length ? lines : [''];
   };
 
-  const drawHero = () => {
-    ensureSpace(60);
-    page.drawText(title, { x: margin, y: cursorY, size: 18, font: boldFont, color: textColor });
-    cursorY -= 28;
-    page.drawText(`${recipientRole} ${recipientName} · ${organization}`, {
-      x: margin,
-      y: cursorY,
-      size: 12,
-      font: regularFont,
-      color: LETTERHEAD.colors.muted,
+  const drawJustifiedParagraph = (
+    text: string,
+    {
+      font = bodyFont,
+      size = 11,
+      color = textColor,
+      justify = true,
+      gapAfter = paragraphGap,
+    }: { font?: PDFFont; size?: number; color?: ReturnType<typeof rgb>; justify?: boolean; gapAfter?: number } = {}
+  ) => {
+    const paragraphs = splitParagraphs(text);
+    paragraphs.forEach((paragraph, paragraphIndex) => {
+      const lines = wrapParagraph(paragraph, font, size);
+      lines.forEach((line, lineIndex) => {
+        ensureSpace(size + lineGap);
+        const trimmed = line.trim();
+        const words = trimmed.split(/\s+/);
+        const canJustify = justify && lineIndex !== lines.length - 1 && words.length > 1;
+        const lineWidth = font.widthOfTextAtSize(trimmed, size);
+        const spacing = canJustify && lineWidth < maxWidth ? (maxWidth - lineWidth) / (words.length - 1) : 0;
+        page.drawText(trimmed, {
+          x: margin,
+          y: cursorY,
+          size,
+          font,
+          color,
+          wordSpacing: canJustify && spacing > 0 ? spacing : undefined,
+        });
+        cursorY -= size + lineGap;
+      });
+      if (paragraphIndex !== paragraphs.length - 1 || gapAfter) {
+        cursorY -= gapAfter;
+      }
     });
+  };
+
+  const drawLetterNumberAndDate = () => {
+    ensureSpace(32);
+    const numberText = reference ? `Ma'lumotnoma No. ${reference}` : "Ma'lumotnoma No. —";
+    const dateValue = dueDate || new Date().toISOString().slice(0, 10);
+    const dateLabel = `Sana: ${dateValue}`;
+    const dateWidth = bodyFont.widthOfTextAtSize(dateLabel, 11);
+    page.drawText(numberText, { x: margin, y: cursorY, size: 11, font: headingFont, color: textColor });
+    page.drawText(dateLabel, { x: pageWidth - margin - dateWidth, y: cursorY, size: 11, font: bodyFont, color: textColor });
+    cursorY -= 24;
+    page.drawLine({
+      start: { x: margin, y: cursorY },
+      end: { x: pageWidth - margin, y: cursorY },
+      thickness: 0.5,
+      color: mutedColor,
+    });
+    cursorY -= 16;
+  };
+
+  const drawRecipientBlock = () => {
+    if (recipientName) {
+      ensureSpace(30);
+      page.drawText(recipientName, { x: margin, y: cursorY, size: 12, font: headingFont, color: textColor });
+      cursorY -= 18;
+    }
+    const recipientMeta = [recipientRole, organization].filter(Boolean).join(' · ');
+    if (recipientMeta) {
+      page.drawText(recipientMeta, { x: margin, y: cursorY, size: 10, font: bodyFont, color: mutedColor });
+      cursorY -= 20;
+    }
+  };
+
+  const drawLetterTitle = () => {
+    if (!title) return;
+    ensureSpace(26);
+    page.drawText(title, { x: margin, y: cursorY, size: 14, font: headingFont, color: textColor });
     cursorY -= 24;
   };
 
-  const drawSummaryCard = () => {
-    const summaryEntries = [
-      { label: "Ma'lumotnoma", value: reference },
-      { label: 'Kategoriya', value: category },
-      { label: 'Til', value: language.toUpperCase() },
-      { label: 'Ustuvorlik', value: priorityCopy[priority] },
-      { label: 'Tasdiqlash muddati', value: dueDate },
-    ].filter((entry) => entry.value);
-
-    if (!summaryEntries.length) return;
-
-    const columns = 2;
-    const rows = Math.ceil(summaryEntries.length / columns);
-    const boxPadding = 18;
-    const rowHeight = 32;
-    const boxHeight = boxPadding * 2 + rows * rowHeight;
-
-    ensureSpace(boxHeight + paragraphGap);
-
-    const topY = cursorY;
-    page.drawRectangle({
-      x: margin,
-      y: topY - boxHeight,
-      width: maxWidth,
-      height: boxHeight,
-      color: rgb(0.97, 0.98, 1),
-      borderColor: rgb(0.85, 0.9, 0.98),
-      borderWidth: 1,
+  const drawBody = () => {
+    sections.forEach((section) => {
+      if (section.heading) {
+        ensureSpace(20);
+        page.drawText(section.heading, { x: margin, y: cursorY, size: 11.5, font: headingFont, color: textColor });
+        cursorY -= 16;
+      }
+      if (section.body) {
+        drawJustifiedParagraph(section.body, { justify: true });
+      }
     });
-
-    const columnWidth = (maxWidth - boxPadding * 2) / columns;
-    summaryEntries.forEach((entry, index) => {
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-      const itemX = margin + boxPadding + column * columnWidth;
-      const itemY = topY - boxPadding - row * rowHeight;
-
-      page.drawText(entry.label.toUpperCase(), {
-        x: itemX,
-        y: itemY,
-        size: 8,
-        font: boldFont,
-        color: accentColor,
-      });
-      page.drawText(entry.value, {
-        x: itemX,
-        y: itemY - 14,
-        size: 11,
-        font: regularFont,
-        color: textColor,
-      });
-    });
-
-    cursorY = topY - boxHeight - paragraphGap;
   };
 
-  const drawSectionHeading = (heading: string) => {
-    ensureSpace(34);
-    page.drawText(heading, { x: margin, y: cursorY, size: 13, font: boldFont, color: textColor });
-    cursorY -= 16;
-    page.drawRectangle({
-      x: margin,
-      y: cursorY + 6,
-      width: 42,
-      height: 2,
-      color: accentColor,
-    });
+  const drawAttachments = () => {
+    if (!attachments.length) return;
+    ensureSpace(attachments.length * 18 + 30);
+    page.drawText('Ilovalar:', { x: margin, y: cursorY, size: 11, font: headingFont, color: textColor });
     cursorY -= 18;
+    attachments.forEach((attachment, index) => {
+      const line = `${index + 1}. ${attachment.name} — ${attachment.description}`;
+      drawJustifiedParagraph(line, { justify: false, gapAfter: 6 });
+    });
   };
 
-  page = createPage();
-  drawHero();
-  drawSummaryCard();
+  const drawNotes = () => {
+    if (!notes) return;
+    ensureSpace(40);
+    page.drawText("Qo'shimcha eslatma:", { x: margin, y: cursorY, size: 11, font: headingFont, color: textColor });
+    cursorY -= 18;
+    drawJustifiedParagraph(notes, { font: bodyFont, color: mutedColor, justify: true });
+  };
 
-  sections.forEach((section) => {
-    drawSectionHeading(section.heading);
-    drawParagraph(section.body);
-  });
+  const drawSignatureBlock = () => {
+    const blockHeight = 130;
+    ensureSpace(blockHeight);
+    const startY = cursorY;
+    const qrSize = 96;
+    const qrMatrix = createPseudoQrMatrix(reference || letterhead.company, 21);
+    drawPseudoQrCode(page, pageWidth - margin - qrSize, startY, qrSize, qrMatrix, textColor);
+    page.drawText(organization, { x: margin, y: startY, size: 12, font: headingFont, color: textColor });
+    cursorY -= 20;
+    if (signatoryRole) {
+      page.drawText(signatoryRole, { x: margin, y: cursorY, size: 10, font: bodyFont, color: mutedColor });
+      cursorY -= 16;
+    }
+    if (signatoryName) {
+      page.drawText(signatoryName, { x: margin, y: cursorY, size: 11, font: headingFont, color: textColor });
+      cursorY -= 18;
+    }
+    cursorY = startY - qrSize - 24;
+  };
 
-  if (attachments.length) {
-    drawSectionHeading('Ilovalar');
-    attachments.forEach((attachment, index) => {
-      drawParagraph(`${index + 1}. ${attachment.name} — ${attachment.description}`, { gapAfter: 6 });
+  const drawFooter = (targetPage: PDFPage) => {
+    const footerY = footerHeight - 10;
+    targetPage.drawLine({
+      start: { x: margin, y: footerY + 24 },
+      end: { x: pageWidth - margin, y: footerY + 24 },
+      thickness: 0.8,
+      color: mutedColor,
     });
-    cursorY -= paragraphGap;
-  }
+    footerContacts.forEach((contact, index) => {
+      targetPage.drawText(contact, {
+        x: margin,
+        y: footerY + 10 - index * 12,
+        size: 9,
+        font: bodyFont,
+        color: mutedColor,
+      });
+    });
+    const signature = `${letterhead.company} · ${language.toUpperCase()}`;
+    const signatureWidth = bodyFont.widthOfTextAtSize(signature, 9);
+    targetPage.drawText(signature, {
+      x: pageWidth - margin - signatureWidth,
+      y: footerY - 2,
+      size: 9,
+      font: bodyFont,
+      color: mutedColor,
+    });
+  };
 
-  if (notes) {
-    drawSectionHeading("Qo'shimcha eslatmalar");
-    drawParagraph(notes);
+  page = createPage(true);
+  drawLetterNumberAndDate();
+  drawRecipientBlock();
+  drawLetterTitle();
+  drawBody();
+  drawAttachments();
+  drawNotes();
+  drawSignatureBlock();
+  const lastPage = pages.at(-1);
+  if (lastPage) {
+    drawFooter(lastPage);
   }
 
   const pdfBytes = await doc.save();
@@ -452,8 +644,8 @@ const SectionEditor = ({
   <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100">
     <div className="mb-3 flex items-center justify-between gap-3">
       <div>
-        <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Bo'lim</p>
-        <p className="text-sm font-semibold text-slate-900">{section.heading || 'Nomlanmagan bo\'lim'}</p>
+        <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Paragraf</p>
+        <p className="text-sm font-semibold text-slate-900">{section.heading || 'Nomlanmagan paragraf'}</p>
       </div>
       <button
         type="button"
@@ -468,23 +660,23 @@ const SectionEditor = ({
 
     <div className="space-y-3">
       <label className="block text-xs font-semibold text-slate-500">
-        Sarlavha
+        Sarlavha (ixtiyoriy)
         <input
           type="text"
           value={section.heading}
           onChange={(event) => onChange({ heading: event.target.value })}
           className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition focus:bg-white focus:ring-2 focus:ring-slate-900/10"
-          placeholder="Masalan, Strategik asos"
+          placeholder="Masalan, Kirish"
         />
       </label>
       <label className="block text-xs font-semibold text-slate-500">
-        Matn
+        Paragraf matni
         <textarea
           value={section.body}
           onChange={(event) => onChange({ body: event.target.value })}
           className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition focus:bg-white focus:ring-2 focus:ring-slate-900/10"
           rows={4}
-          placeholder="Bo'lim mazmunini kiriting..."
+          placeholder="Matnni shu yerga yozing..."
         />
       </label>
     </div>
@@ -496,51 +688,150 @@ const LetterPreview = ({
   sections,
   notes,
   attachments,
+  letterhead,
+  logoPreviewUrl,
 }: {
   meta: LetterMeta;
   sections: LetterSection[];
   notes: string;
   attachments: Attachment[];
-}) => (
-  <div className="rounded-3xl border border-slate-200 bg-white/80 p-8 shadow-xl shadow-slate-200/70">
-    <div className="pb-6">
-      <p className="text-xs uppercase tracking-[0.3em] text-slate-400">{LETTERHEAD.company}</p>
-      <h1 className="mt-2 text-2xl font-semibold text-slate-900">{meta.title}</h1>
-      <p className="text-sm text-slate-500">
-        {meta.recipientRole} {meta.recipientName} · {meta.organization}
-      </p>
-      <p className="text-xs text-slate-400">
-        {meta.category} · {meta.language.toUpperCase()} · {meta.reference}
-      </p>
-    </div>
+  letterhead: LetterheadDesign;
+  logoPreviewUrl?: string | null;
+}) => {
+  const contactLines = letterhead.contacts.length ? letterhead.contacts : defaultLetterhead.contacts;
+  const qrMatrix = createPseudoQrMatrix(meta.reference || letterhead.company, 17);
 
-    <div className="space-y-5 text-sm leading-relaxed text-slate-700">
-      {sections.map((section) => (
-        <Fragment key={section.id}>
-          <p className="font-semibold text-slate-900">{section.heading}</p>
-          <p className="whitespace-pre-line text-slate-600">{section.body}</p>
-        </Fragment>
-      ))}
-    </div>
-
-    {!!attachments.length && (
-      <div className="mt-6 rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-3">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ilovalar</p>
-        <ul className="mt-2 space-y-1 text-sm text-slate-600">
-          {attachments.map((attachment) => (
-            <li key={attachment.id}>
-              <span className="font-medium text-slate-900">{attachment.name}</span> — {attachment.description}
-            </li>
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-xl shadow-slate-200/70">
+      <div className="flex flex-col gap-4 border-b border-slate-100 pb-6 md:flex-row md:items-start md:justify-between">
+        <div className="flex items-center gap-4">
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50">
+            {logoPreviewUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={logoPreviewUrl} alt="Klub logotipi" className="h-full w-full rounded-2xl object-contain" />
+            ) : (
+              <span className="text-xs uppercase tracking-[0.3em] text-slate-400">Logo</span>
+            )}
+          </div>
+          <div>
+            <p className="text-lg font-semibold text-slate-900">{letterhead.company}</p>
+            {letterhead.tagline && <p className="text-sm text-slate-500">{letterhead.tagline}</p>}
+          </div>
+        </div>
+        <div className="text-xs text-slate-500 md:text-right">
+          {contactLines.map((line) => (
+            <p key={line}>{line}</p>
           ))}
-        </ul>
+        </div>
       </div>
-    )}
 
-    {notes && (
-      <div className="mt-4 rounded-2xl border border-slate-100 bg-gradient-to-br from-slate-50 to-white px-4 py-3 text-xs text-slate-500">
-        {notes}
+      <div className="mt-6 flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.3em] text-slate-500 md:flex-row md:items-center md:justify-between">
+        <span>Ma'lumotnoma No. {meta.reference || '—'}</span>
+        <span>Sana: {meta.dueDate}</span>
       </div>
-    )}
+
+      <div className="mt-6 text-sm">
+        <p className="text-base font-semibold text-slate-900">{meta.recipientName}</p>
+        <p className="text-slate-500">
+          {[meta.recipientRole, meta.organization].filter(Boolean).join(' · ')}
+        </p>
+      </div>
+
+      {meta.title && <h2 className="mt-6 text-xl font-semibold text-slate-900">{meta.title}</h2>}
+
+      <div className="mt-4 space-y-4 text-sm leading-relaxed text-slate-700" style={{ textAlign: 'justify', textJustify: 'inter-word' }}>
+        {sections.map((section) => (
+          <Fragment key={section.id}>
+            {section.heading && <p className="font-semibold text-slate-900">{section.heading}</p>}
+            {section.body && <p className="whitespace-pre-line">{section.body}</p>}
+          </Fragment>
+        ))}
+      </div>
+
+      {!!attachments.length && (
+        <div className="mt-6 border-t border-slate-100 pt-4 text-sm text-slate-600">
+          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Ilovalar</p>
+          <ul className="mt-2 space-y-1">
+            {attachments.map((attachment) => (
+              <li key={attachment.id}>
+                <span className="font-semibold text-slate-900">{attachment.name}</span> — {attachment.description}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {notes && (
+        <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          {notes}
+        </div>
+      )}
+
+      <div className="mt-8 flex flex-col gap-6 border-t border-slate-100 pt-6 md:flex-row md:items-center md:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-slate-900">{meta.organization}</p>
+          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">{meta.signatoryRole}</p>
+          <p className="text-sm text-slate-700">{meta.signatoryName}</p>
+        </div>
+        <div
+          className="grid w-24 gap-[2px] rounded-lg border border-slate-200 bg-white p-2 shadow-inner"
+          style={{ gridTemplateColumns: `repeat(${qrMatrix.length}, minmax(0, 1fr))` }}
+        >
+          {qrMatrix.flatMap((row, rowIndex) =>
+            row.map((filled, colIndex) => (
+              <span
+                key={`${rowIndex}-${colIndex}`}
+                className={`aspect-square ${filled ? 'bg-slate-900' : 'bg-slate-200'}`}
+              />
+            ))
+          )}
+        </div>
+      </div>
+
+      <div className="mt-8 border-t border-slate-100 pt-4 text-xs text-slate-500">
+        {contactLines.map((line) => (
+          <p key={`footer-${line}`}>{line}</p>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const BrandColorField = ({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) => (
+  <div>
+    <span className="text-xs font-semibold text-slate-500">{label}</span>
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      {BRAND_PALETTE.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => onChange(option.value)}
+          className={`h-9 w-9 rounded-2xl border-2 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-400 ${
+            option.value.toLowerCase() === value.toLowerCase() ? 'border-slate-900' : 'border-transparent'
+          }`}
+          style={{ backgroundColor: option.value }}
+          aria-label={`${label} ${option.name}`}
+        />
+      ))}
+      <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-500">
+        <span>Maxsus</span>
+        <input
+          type="color"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="h-6 w-10 cursor-pointer border-none bg-transparent p-0"
+        />
+      </label>
+      <span className="text-xs font-semibold text-slate-400">{value.toUpperCase()}</span>
+    </div>
   </div>
 );
 
@@ -549,8 +840,14 @@ export default function NewLetterPage() {
   const [sections, setSections] = useState(defaultSections);
   const [notes, setNotes] = useState(defaultNotes);
   const [attachments, setAttachments] = useState(defaultAttachments);
+  const [letterhead, setLetterhead] = useState(defaultLetterhead);
   const [isExporting, setIsExporting] = useState(false);
   const [logoBytes, setLogoBytes] = useState<Uint8Array | null>(null);
+  const [logoPreviewUrl, setLogoPreviewUrl] = useState<string | null>(null);
+  const [pdfFonts, setPdfFonts] = useState<PdfFonts>({ body: null, heading: null });
+  const logoPreviewUrlRef = useRef<string | null>(null);
+  const defaultLogoRef = useRef<{ bytes: Uint8Array; mimeType: string } | null>(null);
+  const fontLoadPromiseRef = useRef<Promise<PdfFonts> | null>(null);
 
   const stats = useMemo(() => {
     const bodyWordCount = sections.reduce((sum, section) => sum + countWords(section.body), 0);
@@ -566,23 +863,127 @@ export default function NewLetterPage() {
     [meta, sections, notes, attachments]
   );
 
+  const updateLogoPreview = useCallback((bytes: Uint8Array | null, mimeType = 'image/png') => {
+    if (logoPreviewUrlRef.current) {
+      URL.revokeObjectURL(logoPreviewUrlRef.current);
+      logoPreviewUrlRef.current = null;
+    }
+    if (!bytes) {
+      setLogoPreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+    logoPreviewUrlRef.current = url;
+    setLogoPreviewUrl(url);
+  }, []);
+
+  const loadDefaultLogo = useCallback(async () => {
+    try {
+      const response = await fetch('/agmk-logo.png');
+      if (!response.ok) {
+        setLogoBytes(null);
+        updateLogoPreview(null);
+        return;
+      }
+      const buffer = await response.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      const mimeType = response.headers.get('content-type') ?? 'image/png';
+      setLogoBytes(bytes);
+      updateLogoPreview(bytes, mimeType);
+      defaultLogoRef.current = { bytes, mimeType };
+    } catch (error) {
+      console.warn('AGMK logo load failed', error);
+    }
+  }, [updateLogoPreview]);
+
   useEffect(() => {
-    let active = true;
-    const loadLogo = async () => {
-      try {
-        const response = await fetch('/agmk-logo.png');
-        if (!response.ok) return;
-        const buffer = await response.arrayBuffer();
-        if (active) setLogoBytes(new Uint8Array(buffer));
-      } catch (error) {
-        console.warn('AGMK logo load failed', error);
+    loadDefaultLogo();
+    return () => {
+      if (logoPreviewUrlRef.current) {
+        URL.revokeObjectURL(logoPreviewUrlRef.current);
       }
     };
-    loadLogo();
-    return () => {
-      active = false;
-    };
+  }, [loadDefaultLogo]);
+
+  const fetchFontBytes = useCallback(async (path: string) => {
+    const response = await fetch(path);
+    if (!response.ok) {
+      throw new Error(`Font load failed: ${path}`);
+    }
+    const buffer = await response.arrayBuffer();
+    return new Uint8Array(buffer);
   }, []);
+
+  const loadPdfFonts = useCallback(async () => {
+    const [body, heading] = await Promise.all([fetchFontBytes(FONT_PATHS.body), fetchFontBytes(FONT_PATHS.heading)]);
+    return { body, heading };
+  }, [fetchFontBytes]);
+
+  const ensurePdfFonts = useCallback(async (): Promise<PdfFonts> => {
+    if (pdfFonts.body && pdfFonts.heading) {
+      return pdfFonts;
+    }
+    if (!fontLoadPromiseRef.current) {
+      fontLoadPromiseRef.current = loadPdfFonts()
+        .then((loaded) => {
+          setPdfFonts(loaded);
+          return loaded;
+        })
+        .finally(() => {
+          fontLoadPromiseRef.current = null;
+        });
+    }
+    return fontLoadPromiseRef.current;
+  }, [pdfFonts, loadPdfFonts]);
+
+  useEffect(() => {
+    ensurePdfFonts().catch((error) => {
+      console.warn('Font preload failed', error);
+    });
+  }, [ensurePdfFonts]);
+
+  const handleLetterheadChange = (patch: Partial<LetterheadDesign>) => {
+    setLetterhead((prev) => ({ ...prev, ...patch }));
+  };
+
+  const handleLetterheadContactsChange = (value: string) => {
+    const normalized = value
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length);
+    handleLetterheadChange({ contacts: normalized });
+  };
+
+  const handleLetterheadReset = () => {
+    setLetterhead(defaultLetterhead);
+    if (defaultLogoRef.current) {
+      setLogoBytes(defaultLogoRef.current.bytes);
+      updateLogoPreview(defaultLogoRef.current.bytes, defaultLogoRef.current.mimeType);
+    } else {
+      setLogoBytes(null);
+      updateLogoPreview(null);
+    }
+  };
+
+  const handleLogoUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const buffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      setLogoBytes(bytes);
+      updateLogoPreview(bytes, file.type || 'image/png');
+    } catch (error) {
+      console.error('Logo upload failed', error);
+    } finally {
+      event.target.value = '';
+    }
+  };
+
+  const handleLogoRemove = () => {
+    setLogoBytes(null);
+    updateLogoPreview(null);
+  };
 
   const handleMetaChange = (key: keyof LetterMeta, value: string) => {
     setMeta((prev) => ({ ...prev, [key]: value }));
@@ -593,8 +994,8 @@ export default function NewLetterPage() {
       ...prev,
       {
         id: createId(),
-        heading: "Yangi bo'lim",
-        body: "Bo'lim matnini shu yerda davom ettiring.",
+        heading: 'Yangi paragraf',
+        body: 'Paragraf matnini shu yerda davom ettiring.',
       },
     ]);
   };
@@ -632,12 +1033,21 @@ export default function NewLetterPage() {
     setSections(defaultSections);
     setNotes(defaultNotes);
     setAttachments(defaultAttachments);
+    setLetterhead(defaultLetterhead);
+    if (defaultLogoRef.current) {
+      setLogoBytes(defaultLogoRef.current.bytes);
+      updateLogoPreview(defaultLogoRef.current.bytes, defaultLogoRef.current.mimeType);
+    } else {
+      setLogoBytes(null);
+      updateLogoPreview(null);
+    }
   };
 
   const handleExport = async () => {
     setIsExporting(true);
     try {
-      const blob = await generateLetterPdf(previewData, logoBytes ?? undefined);
+      const fontsForExport = await ensurePdfFonts();
+      const blob = await generateLetterPdf(previewData, letterhead, fontsForExport, logoBytes ?? undefined);
       const safeRecipient = meta.recipientName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
       const filename = `${meta.reference || 'letter'}-${safeRecipient || 'recipient'}.pdf`;
       triggerDownload(blob, filename);
@@ -754,7 +1164,7 @@ export default function NewLetterPage() {
                   />
                 </label>
                 <label className="block">
-                  <span className="text-xs font-semibold text-slate-500">Tasdiqlash muddati</span>
+                  <span className="text-xs font-semibold text-slate-500">Sana</span>
                   <div className="mt-2 flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
                     <Calendar className="h-4 w-4 text-slate-400" />
                     <input
@@ -795,6 +1205,28 @@ export default function NewLetterPage() {
                   className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-900 outline-none focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-900/10"
                 />
               </label>
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="block">
+                  <span className="text-xs font-semibold text-slate-500">Imzolovchi (lavozimi)</span>
+                  <input
+                    type="text"
+                    value={meta.signatoryRole}
+                    onChange={(event) => handleMetaChange('signatoryRole', event.target.value)}
+                    className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-900 outline-none focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-900/10"
+                    placeholder="Masalan, Ijrochi direktor"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-semibold text-slate-500">Imzolovchi (ism-familya)</span>
+                  <input
+                    type="text"
+                    value={meta.signatoryName}
+                    onChange={(event) => handleMetaChange('signatoryName', event.target.value)}
+                    className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-900 outline-none focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-900/10"
+                    placeholder="Masalan, Rustam Ganiev"
+                  />
+                </label>
+              </div>
               <div className="flex items-center gap-3">
                 {(['low', 'normal', 'high'] as Priority[]).map((priority) => (
                   <button
@@ -811,13 +1243,122 @@ export default function NewLetterPage() {
                   </button>
                 ))}
               </div>
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm shadow-slate-100">
+          <header className="flex items-center justify-between text-sm">
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Letterhead</p>
+              <p className="text-base font-semibold text-slate-900">Vizual dizayner</p>
+            </div>
+            <div className="text-right text-xs text-slate-400">
+              <p>Palitra: 1B3C53 · 456882 · D2C1B6 · F9F3EF</p>
+              <p>Fontlar: Reddit Sans / Sora</p>
+            </div>
+          </header>
+          <p className="mt-2 text-xs text-slate-500">
+            Klub uslubiyati uchun brand-guideline.md dagi rang va shrift talablariga mos ravishda shablonni sozlang.
+          </p>
+          <div className="mt-4 space-y-4 text-sm">
+            <label className="block">
+              <span className="text-xs font-semibold text-slate-500">Klub nomi</span>
+              <input
+                type="text"
+                value={letterhead.company}
+                onChange={(event) => handleLetterheadChange({ company: event.target.value })}
+                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-900/10"
+                placeholder='"PFK AGMK" MChJ'
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-semibold text-slate-500">Taglayn</span>
+              <input
+                type="text"
+                value={letterhead.tagline}
+                onChange={(event) => handleLetterheadChange({ tagline: event.target.value })}
+                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-900/10"
+                placeholder="Professional Futbol Klubi"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-semibold text-slate-500">Kontaktlar (har bir satr alohida ko'rsatiladi)</span>
+              <textarea
+                value={letterhead.contacts.join('\n')}
+                onChange={(event) => handleLetterheadContactsChange(event.target.value)}
+                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-900 outline-none focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-900/10"
+                rows={3}
+              />
+            </label>
+            <div className="grid gap-4 md:grid-cols-2">
+              <BrandColorField label="Asosiy rang" value={letterhead.primaryColor} onChange={(value) => handleLetterheadChange({ primaryColor: value })} />
+              <BrandColorField label="Aksent rang" value={letterhead.accentColor} onChange={(value) => handleLetterheadChange({ accentColor: value })} />
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <BrandColorField label="Fon" value={letterhead.backgroundColor} onChange={(value) => handleLetterheadChange({ backgroundColor: value })} />
+              <BrandColorField label="Matn rangi" value={letterhead.textColor} onChange={(value) => handleLetterheadChange({ textColor: value })} />
             </div>
           </div>
-
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm shadow-slate-100">
-            <header className="flex items-center justify-between text-sm">
+          <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Kontent</p>
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Klub logotipi</p>
+                <p className="text-sm font-semibold text-slate-900">Grafik belgini yuklang</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <label
+                  htmlFor="letterhead-logo-upload"
+                  className="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-600 transition hover:border-slate-400"
+                >
+                  <Plus className="h-4 w-4" />
+                  Logoni yuklash
+                </label>
+                <input
+                  id="letterhead-logo-upload"
+                  type="file"
+                  accept="image/png,image/jpeg,image/svg+xml"
+                  className="sr-only"
+                  onChange={handleLogoUpload}
+                />
+                {logoPreviewUrl && (
+                  <button
+                    type="button"
+                    onClick={handleLogoRemove}
+                    className="rounded-2xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-500 transition hover:border-slate-300"
+                  >
+                    Tozalash
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="mt-4 flex items-center gap-4">
+              <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white p-2">
+                {logoPreviewUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={logoPreviewUrl} alt="Yuklangan logo" className="h-full w-full object-contain" />
+                ) : (
+                  <span className="text-xs uppercase tracking-[0.3em] text-slate-400">Logo</span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500">
+                SVG yoki fon transparent PNG tavsiya etiladi. Maksimal hajm: 1MB. Yuklangan logo darhol preview va PDF'ga qo'llanadi.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleLetterheadReset}
+            className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 transition hover:border-slate-300"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Letterheadni tiklash
+          </button>
+        </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm shadow-slate-100">
+          <header className="flex items-center justify-between text-sm">
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Kontent</p>
                 <p className="text-base font-semibold text-slate-900">Bo'limlar</p>
               </div>
               <Layers className="h-4 w-4 text-slate-400" />
@@ -939,7 +1480,7 @@ export default function NewLetterPage() {
             </div>
           </div>
 
-          <LetterPreview {...previewData} />
+          <LetterPreview {...previewData} letterhead={letterhead} logoPreviewUrl={logoPreviewUrl ?? undefined} />
         </div>
       </div>
     </div>
