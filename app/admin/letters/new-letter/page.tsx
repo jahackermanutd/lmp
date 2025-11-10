@@ -122,9 +122,9 @@ const FONT_PATHS = {
 } as const;
 
 const defaultLetterhead: LetterheadDesign = {
-  company: '"PFK AGMK" MChJ',
-  tagline: 'Professional Futbol Klubi AGMK',
-  contacts: ['Toshkent viloyati, Olmaliq shahri, 110700', 'Tel: +998 71 000 00 00', 'www.agmk.uz · info@agmk.uz'],
+  company: '"PFK AGMK" MChJ | "PFK AGMK" LLC',
+  tagline: 'OKMK futbol klubi | Football Club OKMK',
+  contacts: ['110101, Toshkent vil., Olmaliq sh., Olimpiya k-si, Metallurg stadioni Tel.: 7061-9-59-20, 7061-5-33-08', '110101, Tashkent dist., Almalyk city., Olympia str., Metallurg stadium, Pho.: Tel.: 7061-9-59-20, 7061-5-33-08'],
   primaryColor: BRAND_GUIDELINE.colors.midnight,
   accentColor: BRAND_GUIDELINE.colors.sand,
   backgroundColor: BRAND_GUIDELINE.colors.linen,
@@ -436,12 +436,24 @@ async function generateLetterPdf(payload: PdfPayload, letterhead: LetterheadDesi
       contactY -= 13;
     });
 
-    targetPage.drawLine({
-      start: { x: margin, y: pageHeight - headerReservedHeight },
-      end: { x: pageWidth - margin, y: pageHeight - headerReservedHeight },
-      thickness: 2,
-      color: accentColor,
+    // targetPage.drawLine({
+    //   start: { x: margin, y: pageHeight - headerReservedHeight },
+    //   end: { x: pageWidth - margin, y: pageHeight - headerReservedHeight },
+    //   thickness: 2,
+    //   color: accentColor,
+    // });
+
+    const barY = pageHeight - headerReservedHeight - 6;
+
+    targetPage.drawRectangle({
+      x: margin,
+      y: barY,
+      width: pageWidth - margin * 2,
+      height: 3,
+      color: rgb(0.10, 0.18, 0.48),
+      opacity: 0.9,
     });
+
   };
 
   const createPage = (includeLetterhead = false) => {
@@ -875,9 +887,8 @@ const BrandColorField = ({
           key={option.value}
           type="button"
           onClick={() => onChange(option.value)}
-          className={`h-9 w-9 rounded-2xl border-2 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-400 ${
-            option.value.toLowerCase() === value.toLowerCase() ? 'border-slate-900' : 'border-transparent'
-          }`}
+          className={`h-9 w-9 rounded-2xl border-2 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-400 ${option.value.toLowerCase() === value.toLowerCase() ? 'border-slate-900' : 'border-transparent'
+            }`}
           style={{ backgroundColor: option.value }}
           aria-label={`${label} ${option.name}`}
         />
@@ -1294,132 +1305,131 @@ export default function NewLetterPage() {
                     key={priority}
                     type="button"
                     onClick={() => handleMetaChange('priority', priority)}
-                    className={`flex-1 rounded-2xl border px-3 py-2 text-xs font-semibold uppercase tracking-wide transition ${
-                      meta.priority === priority
+                    className={`flex-1 rounded-2xl border px-3 py-2 text-xs font-semibold uppercase tracking-wide transition ${meta.priority === priority
                         ? `${priorityStyles[priority]} border-transparent`
                         : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
-                    }`}
+                      }`}
                   >
                     {priorityCopy[priority]}
                   </button>
                 ))}
               </div>
+            </div>
           </div>
-        </div>
 
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm shadow-slate-100">
-          <header className="flex items-center justify-between text-sm">
-            <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Letterhead</p>
-              <p className="text-base font-semibold text-slate-900">Vizual dizayner</p>
-            </div>
-            <div className="text-right text-xs text-slate-400">
-              <p>Palitra: 1B3C53 · 456882 · D2C1B6 · F9F3EF</p>
-              <p>Fontlar: Reddit Sans / Sora</p>
-            </div>
-          </header>
-          <p className="mt-2 text-xs text-slate-500">
-            Klub uslubiyati uchun brand-guideline.md dagi rang va shrift talablariga mos ravishda shablonni sozlang.
-          </p>
-          <div className="mt-4 space-y-4 text-sm">
-            <label className="block">
-              <span className="text-xs font-semibold text-slate-500">Klub nomi</span>
-              <input
-                type="text"
-                value={letterhead.company}
-                onChange={(event) => handleLetterheadChange({ company: event.target.value })}
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-900/10"
-                placeholder='"PFK AGMK" MChJ'
-              />
-            </label>
-            <label className="block">
-              <span className="text-xs font-semibold text-slate-500">Taglayn</span>
-              <input
-                type="text"
-                value={letterhead.tagline}
-                onChange={(event) => handleLetterheadChange({ tagline: event.target.value })}
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-900/10"
-                placeholder="Professional Futbol Klubi"
-              />
-            </label>
-            <label className="block">
-              <span className="text-xs font-semibold text-slate-500">Kontaktlar (har bir satr alohida ko’rsatiladi)</span>
-              <textarea
-                value={letterhead.contacts.join('\n')}
-                onChange={(event) => handleLetterheadContactsChange(event.target.value)}
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-900 outline-none focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-900/10"
-                rows={3}
-              />
-            </label>
-            <div className="grid gap-4 md:grid-cols-2">
-              <BrandColorField label="Asosiy rang" value={letterhead.primaryColor} onChange={(value) => handleLetterheadChange({ primaryColor: value })} />
-              <BrandColorField label="Aksent rang" value={letterhead.accentColor} onChange={(value) => handleLetterheadChange({ accentColor: value })} />
-            </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              <BrandColorField label="Fon" value={letterhead.backgroundColor} onChange={(value) => handleLetterheadChange({ backgroundColor: value })} />
-              <BrandColorField label="Matn rangi" value={letterhead.textColor} onChange={(value) => handleLetterheadChange({ textColor: value })} />
-            </div>
-          </div>
-          <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm shadow-slate-100">
+            <header className="flex items-center justify-between text-sm">
               <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Klub logotipi</p>
-                <p className="text-sm font-semibold text-slate-900">Grafik belgini yuklang</p>
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Letterhead</p>
+                <p className="text-base font-semibold text-slate-900">Vizual dizayner</p>
               </div>
-              <div className="flex items-center gap-2">
-                <label
-                  htmlFor="letterhead-logo-upload"
-                  className="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-600 transition hover:border-slate-400"
-                >
-                  <Plus className="h-4 w-4" />
-                  Logoni yuklash
-                </label>
+              <div className="text-right text-xs text-slate-400">
+                <p>Palitra: 1B3C53 · 456882 · D2C1B6 · F9F3EF</p>
+                <p>Fontlar: Reddit Sans / Sora</p>
+              </div>
+            </header>
+            <p className="mt-2 text-xs text-slate-500">
+              Klub uslubiyati uchun brand-guideline.md dagi rang va shrift talablariga mos ravishda shablonni sozlang.
+            </p>
+            <div className="mt-4 space-y-4 text-sm">
+              <label className="block">
+                <span className="text-xs font-semibold text-slate-500">Klub nomi</span>
                 <input
-                  id="letterhead-logo-upload"
-                  type="file"
-                  accept="image/png,image/jpeg,image/svg+xml"
-                  className="sr-only"
-                  onChange={handleLogoUpload}
+                  type="text"
+                  value={letterhead.company}
+                  onChange={(event) => handleLetterheadChange({ company: event.target.value })}
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-900/10"
+                  placeholder='"PFK AGMK" MChJ'
                 />
-                {logoPreviewUrl && (
-                  <button
-                    type="button"
-                    onClick={handleLogoRemove}
-                    className="rounded-2xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-500 transition hover:border-slate-300"
+              </label>
+              <label className="block">
+                <span className="text-xs font-semibold text-slate-500">Taglayn</span>
+                <input
+                  type="text"
+                  value={letterhead.tagline}
+                  onChange={(event) => handleLetterheadChange({ tagline: event.target.value })}
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-900/10"
+                  placeholder="Professional Futbol Klubi"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-semibold text-slate-500">Kontaktlar (har bir satr alohida ko’rsatiladi)</span>
+                <textarea
+                  value={letterhead.contacts.join('\n')}
+                  onChange={(event) => handleLetterheadContactsChange(event.target.value)}
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-900 outline-none focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-900/10"
+                  rows={3}
+                />
+              </label>
+              <div className="grid gap-4 md:grid-cols-2">
+                <BrandColorField label="Asosiy rang" value={letterhead.primaryColor} onChange={(value) => handleLetterheadChange({ primaryColor: value })} />
+                <BrandColorField label="Aksent rang" value={letterhead.accentColor} onChange={(value) => handleLetterheadChange({ accentColor: value })} />
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <BrandColorField label="Fon" value={letterhead.backgroundColor} onChange={(value) => handleLetterheadChange({ backgroundColor: value })} />
+                <BrandColorField label="Matn rangi" value={letterhead.textColor} onChange={(value) => handleLetterheadChange({ textColor: value })} />
+              </div>
+            </div>
+            <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Klub logotipi</p>
+                  <p className="text-sm font-semibold text-slate-900">Grafik belgini yuklang</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label
+                    htmlFor="letterhead-logo-upload"
+                    className="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-600 transition hover:border-slate-400"
                   >
-                    Tozalash
-                  </button>
-                )}
+                    <Plus className="h-4 w-4" />
+                    Logoni yuklash
+                  </label>
+                  <input
+                    id="letterhead-logo-upload"
+                    type="file"
+                    accept="image/png,image/jpeg,image/svg+xml"
+                    className="sr-only"
+                    onChange={handleLogoUpload}
+                  />
+                  {logoPreviewUrl && (
+                    <button
+                      type="button"
+                      onClick={handleLogoRemove}
+                      className="rounded-2xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-500 transition hover:border-slate-300"
+                    >
+                      Tozalash
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="mt-4 flex items-center gap-4">
+                <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white p-2">
+                  {logoPreviewUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={logoPreviewUrl} alt="Yuklangan logo" className="h-full w-full object-contain" />
+                  ) : (
+                    <span className="text-xs uppercase tracking-[0.3em] text-slate-400">Logo</span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-500">
+                  SVG yoki fon transparent PNG tavsiya etiladi. Maksimal hajm: 1MB. Yuklangan logo darhol preview va PDF’ga qo’llanadi.
+                </p>
               </div>
             </div>
-            <div className="mt-4 flex items-center gap-4">
-              <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white p-2">
-                {logoPreviewUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={logoPreviewUrl} alt="Yuklangan logo" className="h-full w-full object-contain" />
-                ) : (
-                  <span className="text-xs uppercase tracking-[0.3em] text-slate-400">Logo</span>
-                )}
-              </div>
-              <p className="text-xs text-slate-500">
-                SVG yoki fon transparent PNG tavsiya etiladi. Maksimal hajm: 1MB. Yuklangan logo darhol preview va PDF’ga qo’llanadi.
-              </p>
-            </div>
+            <button
+              type="button"
+              onClick={handleLetterheadReset}
+              className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 transition hover:border-slate-300"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Letterheadni tiklash
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={handleLetterheadReset}
-            className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 transition hover:border-slate-300"
-          >
-            <RefreshCw className="h-4 w-4" />
-            Letterheadni tiklash
-          </button>
-        </div>
 
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm shadow-slate-100">
-          <header className="flex items-center justify-between text-sm">
-            <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Kontent</p>
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm shadow-slate-100">
+            <header className="flex items-center justify-between text-sm">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Kontent</p>
                 <p className="text-base font-semibold text-slate-900">Bo’limlar</p>
               </div>
               <Layers className="h-4 w-4 text-slate-400" />
