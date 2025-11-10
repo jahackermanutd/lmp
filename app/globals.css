@@ -96,3 +96,42 @@ h1, h2, h3, h4, h5, h6 {
 .bg-light {
   background-color: var(--color-light);
 }
+
+.a4-letter {
+  width: 100%;
+  max-width: 794px;
+  min-height: 1123px;
+  margin: 0 auto;
+  padding: clamp(24px, 4vw, 56px);
+}
+
+@media (max-width: 768px) {
+  .a4-letter {
+    min-height: auto;
+    padding: clamp(20px, 6vw, 32px);
+  }
+}
+
+.letter-body .letter-paragraph + .letter-paragraph {
+  margin-top: 1.5rem;
+}
+
+.letter-body .letter-paragraph p {
+  margin: 0;
+}
+
+.letter-body .letter-paragraph p + p {
+  margin-top: 0.5rem;
+}
+
+.letter-body .letter-text {
+  text-align: justify;
+  text-align-last: left;
+  text-justify: inter-word;
+  hyphens: auto;
+}
+
+.letter-body .letter-heading {
+  text-align: left;
+  text-align-last: left;
+}

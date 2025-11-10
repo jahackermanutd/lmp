@@ -1,7 +1,7 @@
 'use client';
 
 import type { ChangeEvent } from 'react';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Calendar, Download, FileCheck2, Layers, Plus, RefreshCw, Tag, Trash2 } from 'lucide-react';
 import { PDFDocument, PDFImage, PDFPage, PDFFont, StandardFonts, rgb } from 'pdf-lib';
@@ -172,6 +172,16 @@ const hexToPdfColor = (hex: string, fallback: ReturnType<typeof rgb>) => {
   return rgb(color.r / 255, color.g / 255, color.b / 255);
 };
 
+const toArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
+  const { buffer, byteOffset, byteLength } = bytes;
+  if (buffer instanceof ArrayBuffer) {
+    return buffer.slice(byteOffset, byteOffset + byteLength);
+  }
+  const clone = new Uint8Array(byteLength);
+  clone.set(bytes);
+  return clone.buffer;
+};
+
 const createPseudoQrMatrix = (seed: string, dimension = 21) => {
   const sanitized = seed && seed.trim().length ? seed : 'default';
   const matrix = Array.from({ length: dimension }, () => Array<boolean>(dimension).fill(false));
@@ -314,8 +324,8 @@ async function generateLetterPdf(payload: PdfPayload, letterhead: LetterheadDesi
   const margin = 48;
   const paragraphGap = 14;
   const lineGap = 4;
-  const headerReservedHeight = 150;
-  const footerHeight = 72;
+  const headerReservedHeight = 145;
+  const footerHeight = 40;
   const pageWidth = 612;
   const pageHeight = 792;
   const maxWidth = pageWidth - margin * 2;
@@ -336,47 +346,66 @@ async function generateLetterPdf(payload: PdfPayload, letterhead: LetterheadDesi
   const pages: PDFPage[] = [];
 
   const drawLetterhead = (targetPage: PDFPage) => {
-    const logoWidth = 72;
-    const logoMaxHeight = 64;
+    const logoPlaceholderWidth = 88;
+    const logoMaxWidth = 120;
+    const logoMaxHeight = 80;
     const columnGap = 20;
+    const contactColumnWidth = 220;
     const topY = pageHeight - margin;
-    const detailX = margin + logoWidth + columnGap;
-    const detailWidth = pageWidth - margin - detailX;
+
+    let logoBoxWidth = logoPlaceholderWidth;
+    let logoBoxHeight = logoMaxHeight;
+
     if (logoImage) {
-      const ratio = logoImage.height / logoImage.width;
-      const height = Math.min(logoMaxHeight, logoWidth * ratio);
+      const naturalWidth = logoImage.width;
+      const naturalHeight = logoImage.height;
+      const widthScale = logoMaxWidth / naturalWidth;
+      const heightScale = logoMaxHeight / naturalHeight;
+      const scale = Math.min(widthScale, heightScale, 1);
+      const renderWidth = naturalWidth * scale;
+      const renderHeight = naturalHeight * scale;
+
+      logoBoxWidth = Math.max(renderWidth, logoPlaceholderWidth);
+      logoBoxHeight = Math.max(renderHeight, 0);
+
       targetPage.drawImage(logoImage, {
         x: margin,
-        y: topY - height,
-        width: logoWidth,
-        height,
+        y: topY - renderHeight,
+        width: renderWidth,
+        height: renderHeight,
       });
     } else {
       targetPage.drawRectangle({
         x: margin,
         y: topY - logoMaxHeight,
-        width: logoWidth,
+        width: logoPlaceholderWidth,
         height: logoMaxHeight,
         borderColor: accentColor,
         borderWidth: 1,
       });
       targetPage.drawText('LOGO', {
-        x: margin + 14,
+        x: margin + 16,
         y: topY - logoMaxHeight / 2 - 4,
-        size: 11,
+        size: 12,
         font: headingFont,
         color: accentColor,
       });
     }
-    let detailY = topY - 8;
+
+    const contactStartX = pageWidth - margin - contactColumnWidth;
+    const detailX = margin + logoBoxWidth + columnGap;
+    const detailWidth = Math.max(contactStartX - detailX - columnGap, 120);
+    const headingSize = 16;
+    let detailY = topY - headingSize;
+
     targetPage.drawText(letterhead.company, {
       x: detailX,
       y: detailY,
-      size: 16,
+      size: headingSize,
       font: headingFont,
       color: textColor,
     });
-    detailY -= 18;
+    detailY -= headingSize + 2;
     if (letterhead.tagline) {
       targetPage.drawText(letterhead.tagline, {
         x: detailX,
@@ -387,23 +416,31 @@ async function generateLetterPdf(payload: PdfPayload, letterhead: LetterheadDesi
       });
       detailY -= 16;
     }
+
+    const logoAreaBottom = topY - logoBoxHeight;
+    const rowBottom = Math.min(logoAreaBottom, detailY - 12);
+
+    let contactY = topY - 10;
     footerContacts.slice(0, 4).forEach((contact) => {
-      if (detailY <= pageHeight - headerReservedHeight + 20) return;
+      if (contactY <= rowBottom + 8) return;
+      const textWidth = bodyFont.widthOfTextAtSize(contact, 10);
+      const xPosition = contactStartX + Math.max(contactColumnWidth - textWidth, 0);
       targetPage.drawText(contact, {
-        x: detailX,
-        y: detailY,
+        x: xPosition,
+        y: contactY,
         size: 10,
         font: bodyFont,
         color: mutedColor,
-        maxWidth: detailWidth,
+        maxWidth: contactColumnWidth,
       });
-      detailY -= 13;
+      contactY -= 13;
     });
+
     targetPage.drawLine({
       start: { x: margin, y: pageHeight - headerReservedHeight },
       end: { x: pageWidth - margin, y: pageHeight - headerReservedHeight },
-      thickness: 1,
-      color: mutedColor,
+      thickness: 2,
+      color: accentColor,
     });
   };
 
@@ -458,7 +495,13 @@ async function generateLetterPdf(payload: PdfPayload, letterhead: LetterheadDesi
       color = textColor,
       justify = true,
       gapAfter = paragraphGap,
-    }: { font?: PDFFont; size?: number; color?: ReturnType<typeof rgb>; justify?: boolean; gapAfter?: number } = {}
+    }: {
+      font?: PDFFont;
+      size?: number;
+      color?: ReturnType<typeof rgb>;
+      justify?: boolean;
+      gapAfter?: number;
+    } = {}
   ) => {
     const paragraphs = splitParagraphs(text);
     paragraphs.forEach((paragraph, paragraphIndex) => {
@@ -467,17 +510,32 @@ async function generateLetterPdf(payload: PdfPayload, letterhead: LetterheadDesi
         ensureSpace(size + lineGap);
         const trimmed = line.trim();
         const words = trimmed.split(/\s+/);
-        const canJustify = justify && lineIndex !== lines.length - 1 && words.length > 1;
+        const isLastLine = lineIndex === lines.length - 1;
         const lineWidth = font.widthOfTextAtSize(trimmed, size);
-        const spacing = canJustify && lineWidth < maxWidth ? (maxWidth - lineWidth) / (words.length - 1) : 0;
-        page.drawText(trimmed, {
-          x: margin,
-          y: cursorY,
-          size,
-          font,
-          color,
-          wordSpacing: canJustify && spacing > 0 ? spacing : undefined,
-        });
+        const remainingWidth = maxWidth - lineWidth;
+        const canJustify = justify && !isLastLine && words.length > 2 && remainingWidth > 0;
+
+        if (canJustify) {
+          const baseSpaceWidth = font.widthOfTextAtSize(' ', size);
+          const extraSpacing = Math.min(remainingWidth / (words.length - 1), size * 2);
+          const gapWidth = baseSpaceWidth + extraSpacing;
+          let cursorX = margin;
+          words.forEach((word, wordIndex) => {
+            page.drawText(word, { x: cursorX, y: cursorY, size, font, color });
+            cursorX += font.widthOfTextAtSize(word, size);
+            if (wordIndex !== words.length - 1) {
+              cursorX += gapWidth;
+            }
+          });
+        } else {
+          page.drawText(trimmed, {
+            x: margin,
+            y: cursorY,
+            size,
+            font,
+            color,
+          });
+        }
         cursorY -= size + lineGap;
       });
       if (paragraphIndex !== paragraphs.length - 1 || gapAfter) {
@@ -495,12 +553,12 @@ async function generateLetterPdf(payload: PdfPayload, letterhead: LetterheadDesi
     page.drawText(numberText, { x: margin, y: cursorY, size: 11, font: headingFont, color: textColor });
     page.drawText(dateLabel, { x: pageWidth - margin - dateWidth, y: cursorY, size: 11, font: bodyFont, color: textColor });
     cursorY -= 24;
-    page.drawLine({
-      start: { x: margin, y: cursorY },
-      end: { x: pageWidth - margin, y: cursorY },
-      thickness: 0.5,
-      color: mutedColor,
-    });
+    // page.drawLine({
+    //   start: { x: margin, y: cursorY },
+    //   end: { x: pageWidth - margin, y: cursorY },
+    //   thickness: 0.5,
+    //   color: mutedColor,
+    // });
     cursorY -= 16;
   };
 
@@ -557,10 +615,13 @@ async function generateLetterPdf(payload: PdfPayload, letterhead: LetterheadDesi
   };
 
   const drawSignatureBlock = () => {
-    const blockHeight = 130;
+    const qrSize = 96 / 1.5;
+    let textHeight = 20;
+    if (signatoryRole) textHeight += 16;
+    if (signatoryName) textHeight += 18;
+    const blockHeight = Math.max(qrSize + 24, textHeight + 24);
     ensureSpace(blockHeight);
     const startY = cursorY;
-    const qrSize = 96;
     const qrMatrix = createPseudoQrMatrix(reference || letterhead.company, 21);
     drawPseudoQrCode(page, pageWidth - margin - qrSize, startY, qrSize, qrMatrix, textColor);
     page.drawText(organization, { x: margin, y: startY, size: 12, font: headingFont, color: textColor });
@@ -573,7 +634,7 @@ async function generateLetterPdf(payload: PdfPayload, letterhead: LetterheadDesi
       page.drawText(signatoryName, { x: margin, y: cursorY, size: 11, font: headingFont, color: textColor });
       cursorY -= 18;
     }
-    cursorY = startY - qrSize - 24;
+    cursorY = startY - blockHeight;
   };
 
   const drawFooter = (targetPage: PDFPage) => {
@@ -618,7 +679,7 @@ async function generateLetterPdf(payload: PdfPayload, letterhead: LetterheadDesi
   }
 
   const pdfBytes = await doc.save();
-  return new Blob([pdfBytes], { type: 'application/pdf' });
+  return new Blob([toArrayBuffer(pdfBytes)], { type: 'application/pdf' });
 }
 
 const triggerDownload = (blob: Blob, filename: string) => {
@@ -654,7 +715,7 @@ const SectionEditor = ({
         className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
       >
         <Trash2 className="h-3.5 w-3.5" />
-        O'chirish
+        O’chirish
       </button>
     </div>
 
@@ -702,10 +763,10 @@ const LetterPreview = ({
   const qrMatrix = createPseudoQrMatrix(meta.reference || letterhead.company, 17);
 
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-xl shadow-slate-200/70">
-      <div className="flex flex-col gap-4 border-b border-slate-100 pb-6 md:flex-row md:items-start md:justify-between">
-        <div className="flex items-center gap-4">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50">
+    <div className="a4-letter rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-200/70">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 pb-4">
+        <div className="flex items-start gap-4">
+          <div className="flex h-16 w-16 flex-shrink-0 items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50">
             {logoPreviewUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={logoPreviewUrl} alt="Klub logotipi" className="h-full w-full rounded-2xl object-contain" />
@@ -726,7 +787,7 @@ const LetterPreview = ({
       </div>
 
       <div className="mt-6 flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.3em] text-slate-500 md:flex-row md:items-center md:justify-between">
-        <span>Ma'lumotnoma No. {meta.reference || '—'}</span>
+        <span>Ma’lumotnoma No. {meta.reference || '—'}</span>
         <span>Sana: {meta.dueDate}</span>
       </div>
 
@@ -739,12 +800,12 @@ const LetterPreview = ({
 
       {meta.title && <h2 className="mt-6 text-xl font-semibold text-slate-900">{meta.title}</h2>}
 
-      <div className="mt-4 space-y-4 text-sm leading-relaxed text-slate-700" style={{ textAlign: 'justify', textJustify: 'inter-word' }}>
+      <div className="letter-body mt-4 text-sm leading-relaxed text-slate-700">
         {sections.map((section) => (
-          <Fragment key={section.id}>
-            {section.heading && <p className="font-semibold text-slate-900">{section.heading}</p>}
-            {section.body && <p className="whitespace-pre-line">{section.body}</p>}
-          </Fragment>
+          <div key={section.id} className="letter-paragraph">
+            {section.heading && <p className="letter-heading font-semibold text-slate-900">{section.heading}</p>}
+            {section.body && <p className="letter-text whitespace-pre-line">{section.body}</p>}
+          </div>
         ))}
       </div>
 
@@ -767,7 +828,7 @@ const LetterPreview = ({
         </div>
       )}
 
-      <div className="mt-8 flex flex-col gap-6 border-t border-slate-100 pt-6 md:flex-row md:items-center md:justify-between">
+      <div className="mt-8 flex flex-col gap-2 border-t border-slate-100 pt-4 md:flex-row md:items-center md:justify-between">
         <div>
           <p className="text-sm font-semibold text-slate-900">{meta.organization}</p>
           <p className="text-xs uppercase tracking-[0.2em] text-slate-400">{meta.signatoryRole}</p>
@@ -872,7 +933,7 @@ export default function NewLetterPage() {
       setLogoPreviewUrl(null);
       return;
     }
-    const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+    const url = URL.createObjectURL(new Blob([toArrayBuffer(bytes)], { type: mimeType }));
     logoPreviewUrlRef.current = url;
     setLogoPreviewUrl(url);
   }, []);
@@ -1109,7 +1170,7 @@ export default function NewLetterPage() {
             <header className="flex items-center justify-between text-sm">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Xat parametrlari</p>
-                <p className="text-base font-semibold text-slate-900">Meta ma'lumotlar</p>
+                <p className="text-base font-semibold text-slate-900">Meta ma’lumotlar</p>
               </div>
               <Tag className="h-4 w-4 text-slate-400" />
             </header>
@@ -1155,7 +1216,7 @@ export default function NewLetterPage() {
               </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="block">
-                  <span className="text-xs font-semibold text-slate-500">Ma'lumotnoma</span>
+                  <span className="text-xs font-semibold text-slate-500">Ma’lumotnoma</span>
                   <input
                     type="text"
                     value={meta.reference}
@@ -1282,7 +1343,7 @@ export default function NewLetterPage() {
               />
             </label>
             <label className="block">
-              <span className="text-xs font-semibold text-slate-500">Kontaktlar (har bir satr alohida ko'rsatiladi)</span>
+              <span className="text-xs font-semibold text-slate-500">Kontaktlar (har bir satr alohida ko’rsatiladi)</span>
               <textarea
                 value={letterhead.contacts.join('\n')}
                 onChange={(event) => handleLetterheadContactsChange(event.target.value)}
@@ -1341,7 +1402,7 @@ export default function NewLetterPage() {
                 )}
               </div>
               <p className="text-xs text-slate-500">
-                SVG yoki fon transparent PNG tavsiya etiladi. Maksimal hajm: 1MB. Yuklangan logo darhol preview va PDF'ga qo'llanadi.
+                SVG yoki fon transparent PNG tavsiya etiladi. Maksimal hajm: 1MB. Yuklangan logo darhol preview va PDF’ga qo’llanadi.
               </p>
             </div>
           </div>
@@ -1359,7 +1420,7 @@ export default function NewLetterPage() {
           <header className="flex items-center justify-between text-sm">
             <div>
               <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Kontent</p>
-                <p className="text-base font-semibold text-slate-900">Bo'limlar</p>
+                <p className="text-base font-semibold text-slate-900">Bo’limlar</p>
               </div>
               <Layers className="h-4 w-4 text-slate-400" />
             </header>
@@ -1382,7 +1443,7 @@ export default function NewLetterPage() {
               className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300 px-4 py-3 text-sm font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-slate-50"
             >
               <Plus className="h-4 w-4" />
-              Bo'lim qo'shish
+              Bo’lim qo’shish
             </button>
           </div>
 
@@ -1390,7 +1451,7 @@ export default function NewLetterPage() {
             <header className="flex items-center justify-between text-sm">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Ilova</p>
-                <p className="text-base font-semibold text-slate-900">Qo'shimcha hujjatlar</p>
+                <p className="text-base font-semibold text-slate-900">Qo’shimcha hujjatlar</p>
               </div>
               <FileCheck2 className="h-4 w-4 text-slate-400" />
             </header>
@@ -1434,10 +1495,10 @@ export default function NewLetterPage() {
               className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300 px-4 py-3 text-sm font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-slate-50"
             >
               <Plus className="h-4 w-4" />
-              Ilova qo'shish
+              Ilova qo’shish
             </button>
             <label className="mt-6 block text-xs font-semibold text-slate-500">
-              Qo'shimcha eslatmalar
+              Qo’shimcha eslatmalar
               <textarea
                 value={notes}
                 onChange={(event) => setNotes(event.target.value)}
@@ -1449,7 +1510,7 @@ export default function NewLetterPage() {
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm shadow-slate-100">
-            <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Uslubiy yo'riqnomalar</p>
+            <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Uslubiy yo’riqnomalar</p>
             <ul className="mt-4 space-y-3 text-sm text-slate-600">
               {writingGuides.map((guide) => (
                 <li key={guide} className="flex gap-3">
@@ -1466,11 +1527,11 @@ export default function NewLetterPage() {
             <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Monitoring</p>
             <div className="mt-4 grid gap-4 md:grid-cols-3">
               <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <p className="text-xs font-semibold text-slate-500">Bo'limlar</p>
+                <p className="text-xs font-semibold text-slate-500">Bo’limlar</p>
                 <p className="mt-2 text-2xl font-semibold text-slate-900">{stats.sections}</p>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <p className="text-xs font-semibold text-slate-500">So'zlar</p>
+                <p className="text-xs font-semibold text-slate-500">So’zlar</p>
                 <p className="mt-2 text-2xl font-semibold text-slate-900">{stats.words}</p>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-white p-4">
