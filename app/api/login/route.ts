@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import jwt from 'jsonwebtoken';
+import { attachAuthCookies, createAccessToken, createRefreshToken } from '@/app/lib/auth';
 
 // Mock user database
 const MOCK_USERS = [
@@ -55,19 +55,10 @@ export async function POST(request: NextRequest) {
 
     console.log('[API Login] User found:', user.email, 'Role:', user.role);
 
-    // Create JWT token
-    const token = jwt.sign(
-      {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        name: user.name
-      },
-      process.env.JWT_SECRET as string,
-      { expiresIn: '7d' }
-    );
+    const accessToken = createAccessToken(user);
+    const refreshToken = createRefreshToken(user);
 
-    console.log('[API Login] JWT token created');
+    console.log('[API Login] Tokens created');
 
     // Create response with token in cookie
     const response = NextResponse.json(
@@ -78,23 +69,14 @@ export async function POST(request: NextRequest) {
           email: user.email,
           role: user.role,
           name: user.name
-        },
-        token
+        }
       },
       { status: 200 }
     );
 
-    // Set cookie (not HTTP-only so js-cookie can read it)
-    // Still secure with sameSite protection
-    response.cookies.set('token', token, {
-      httpOnly: false, // Allow JavaScript to read it
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 7, // 7 days
-      path: '/'
-    });
+    attachAuthCookies(response, accessToken, refreshToken);
 
-    console.log('[API Login] Cookie set, returning response');
+    console.log('[API Login] Cookies set, returning response');
     return response;
   } catch (error) {
     console.error('Login error:', error);

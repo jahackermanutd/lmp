@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import jwt from 'jsonwebtoken';
+import { verifyToken } from '@/app/lib/auth';
 
 export async function GET(request: NextRequest) {
   try {
     console.log('[API /me] Request received');
     // Get token from cookie
-    const token = request.cookies.get('token')?.value;
+    const token = request.cookies.get('accessToken')?.value;
 
     if (!token) {
       console.log('[API /me] No token found');
@@ -17,12 +17,17 @@ export async function GET(request: NextRequest) {
 
     console.log('[API /me] Token found, verifying...');
     // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as {
+    const decoded = verifyToken<{
       id: string;
       email: string;
       role: string;
       name: string;
-    };
+      type: string;
+    }>(token);
+
+    if (decoded.type !== 'access') {
+      throw new Error('Invalid token type');
+    }
 
     console.log('[API /me] Token verified, user:', decoded.email);
     // Return user data

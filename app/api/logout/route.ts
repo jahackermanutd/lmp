@@ -6,12 +6,22 @@ export async function POST() {
     { status: 200 }
   );
 
-  // Clear the token cookie
-  response.cookies.set('token', '', {
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  response.cookies.set('accessToken', '', {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: isProduction,
     sameSite: 'lax',
-    maxAge: 0
+    path: '/',
+    maxAge: 0,
+  });
+
+  response.cookies.set('refreshToken', '', {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: 'lax',
+    path: '/api/refresh',
+    maxAge: 0,
   });
 
   return response;

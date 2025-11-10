@@ -2,8 +2,6 @@
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import Cookies from 'js-cookie';
-import { jwtDecode } from 'jwt-decode';
 
 interface User {
   id: string;
@@ -33,41 +31,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loadUser();
   }, []);
 
-  const loadUser = async () => {
-    console.log('[AuthContext] loadUser called');
-    try {
-      const token = Cookies.get('token');
-      console.log('[AuthContext] Token from cookie:', token ? 'exists' : 'missing');
-      
-      if (!token) {
-        console.log('[AuthContext] No token, setting loading to false');
-        setLoading(false);
-        return;
-      }
+  const fetchCurrentUser = async () => {
+    const meResponse = await fetch('/api/me', {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'no-store',
+    });
 
-      try {
-        // Decode JWT token client-side
-        const decoded = jwtDecode<{
-          id: string;
-          email: string;
-          role: string;
-          name: string;
-        }>(token);
-        
-        console.log('[AuthContext] Token decoded successfully, user:', decoded.email, 'role:', decoded.role);
-        setUser({ ...decoded, token });
-        console.log('[AuthContext] User state set');
-      } catch (decodeError) {
-        console.error('[AuthContext] Error decoding token:', decodeError);
-        Cookies.remove('token', { path: '/' });
-        setUser(null);
+    if (meResponse.ok) {
+      const data = await meResponse.json();
+      setUser(data.user);
+      return true;
+    }
+
+    if (meResponse.status === 401) {
+      const refreshResponse = await fetch('/api/refresh', {
+        method: 'POST',
+        credentials: 'include',
+        cache: 'no-store',
+      });
+
+      if (refreshResponse.ok) {
+        const retryResponse = await fetch('/api/me', {
+          method: 'GET',
+          credentials: 'include',
+          cache: 'no-store',
+        });
+
+        if (retryResponse.ok) {
+          const data = await retryResponse.json();
+          setUser(data.user);
+          return true;
+        }
       }
+    }
+
+    setUser(null);
+    return false;
+  };
+
+  const loadUser = async () => {
+    setLoading(true);
+    try {
+      await fetchCurrentUser();
     } catch (error) {
-      console.error('[AuthContext] Error in loadUser:', error);
-      Cookies.remove('token', { path: '/' });
+      console.error('[AuthContext] Error loading user:', error);
       setUser(null);
     } finally {
-      console.log('[AuthContext] Setting loading to false');
       setLoading(false);
     }
   };
@@ -75,11 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (email: string, password: string) => {
     try {
       console.log('Starting login...');
-      
-      // Clear any existing cookies and state before login
-      Cookies.remove('token', { path: '/' });
-      setUser(null);
-      
+
       const response = await fetch('/api/login', {
         method: 'POST',
         headers: {
@@ -96,13 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         throw new Error(data.error || 'Login failed');
       }
 
-      // Store the token in cookie for immediate access
-      Cookies.set('token', data.token, { 
-        expires: 7,
-        path: '/',
-        sameSite: 'lax'
-      });
-      console.log('Token stored in cookie, value:', Cookies.get('token') ? 'exists' : 'missing');
+      setUser(data.user);
 
       // Determine redirect URL based on role
       let redirectUrl = '/';
@@ -119,9 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       console.log('Redirecting to:', redirectUrl);
-      
-      // Use window.location for a hard redirect to ensure middleware runs
-      window.location.href = redirectUrl;
+      router.replace(redirectUrl);
     } catch (error) {
       console.error('Login error:', error);
       throw error;
@@ -130,22 +128,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = async () => {
     try {
-      // Clear cookie and state first
-      Cookies.remove('token', { path: '/' });
-      setUser(null);
-      
-      // Call logout API
       await fetch('/api/logout', {
         method: 'POST',
         credentials: 'include'
       });
 
-      // Hard redirect to clear any cached state
-      window.location.href = '/';
+      setUser(null);
+      router.replace('/');
     } catch (error) {
       console.error('Logout error:', error);
-      // Even if API fails, still redirect
-      window.location.href = '/';
+      setUser(null);
+      router.replace('/');
     }
   };
 

@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react';
 import { MdPerson, MdEmail, MdLock, MdVisibility, MdVisibilityOff } from 'react-icons/md';
 import { useAuth } from './context/AuthContext';
-import Cookies from 'js-cookie';
 
 export default function Page() {
   const [email, setEmail] = useState('');
@@ -33,9 +32,6 @@ export default function Page() {
     setError('');
 
     try {
-      // Clear any existing cookies before login
-      Cookies.remove('token');
-      
       await login(email, password);
       // Redirect will be handled by the login function in AuthContext
       // Don't set isLoading to false since we're redirecting away

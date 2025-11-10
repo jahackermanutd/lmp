@@ -28,7 +28,7 @@ export async function middleware(request: NextRequest) {
   console.log('[Middleware] Protected route detected:', matchedRoute);
 
   // Get token from cookie
-  const token = request.cookies.get('token')?.value;
+  const token = request.cookies.get('accessToken')?.value;
 
   if (!token) {
     // No token, redirect to login
@@ -40,10 +40,19 @@ export async function middleware(request: NextRequest) {
 
   try {
     // Verify and decode token using jose (Edge Runtime compatible)
-    const secret = new TextEncoder().encode(process.env.JWT_SECRET);
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) {
+      throw new Error('JWT_SECRET is not configured');
+    }
+    const secret = new TextEncoder().encode(jwtSecret);
     const { payload } = await jwtVerify(token, secret);
 
     console.log('[Middleware] Token verified, user role:', payload.role);
+
+    if (payload.type !== 'access') {
+      console.log('[Middleware] Invalid token type, redirecting to /');
+      return NextResponse.redirect(new URL('/', request.url));
+    }
 
     // Check if user has the required role
     const requiredRoles = protectedRoutes[matchedRoute as keyof typeof protectedRoutes];
