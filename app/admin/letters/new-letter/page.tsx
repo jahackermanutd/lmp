@@ -840,7 +840,7 @@ const LetterPreview = ({
         </div>
       )}
 
-      <div className="mt-8 flex flex-col gap-2 border-t border-slate-100 pt-4 md:flex-row md:items-center md:justify-between">
+      <div className="mt-8 flex flex-col gap-2 border-t border-slate-100 pt-4 md:flex-row md:items-start md:justify-between">
         <div>
           <p className="text-sm font-semibold text-slate-900">{meta.organization}</p>
           <p className="text-xs uppercase tracking-[0.2em] text-slate-400">{meta.signatoryRole}</p>
